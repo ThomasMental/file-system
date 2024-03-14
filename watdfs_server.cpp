@@ -1,3 +1,4 @@
+
 //
 // Starter code for CS 454/654
 // You SHOULD change this file
@@ -13,6 +14,7 @@ INIT_LOG
 #include <errno.h>
 #include <cstring>
 #include <cstdlib>
+#include <fuse.h>
 
 // Global state server_persist_dir.
 char *server_persist_dir = nullptr;
@@ -62,22 +64,214 @@ int watdfs_getattr(int *argTypes, void **args) {
 
     // TODO: Make the stat system call, which is the corresponding system call needed
     // to support getattr. You should use the statbuf as an argument to the stat system call.
-    (void)statbuf;
-
     // Let sys_ret be the return code from the stat system call.
-    int sys_ret = 0;
+    int sys_ret = stat(full_path, statbuf);
 
     if (sys_ret < 0) {
-        // If there is an error on the system call, then the return code should
-        // be -errno.
         *ret = -errno;
+    } else {
+        *ret = sys_ret;
     }
 
     // Clean up the full path, it was allocated on the heap.
     free(full_path);
-
-    //DLOG("Returning code: %d", *ret);
+    DLOG("Returning code: %d", *ret);
     // The RPC call succeeded, so return 0.
+    return 0;
+}
+
+// The server implementation of mknod.
+int watdfs_mknod(int *argTypes, void **args) {
+    // path, mode, dev, retcode
+    char *short_path = (char *)args[0];
+    mode_t *mode = (mode_t *)args[1];
+    dev_t *dev = (dev_t *)args[2];
+    int *ret = (int *)args[3];
+    char *full_path = get_full_path(short_path);
+
+    // mknod system call
+    *ret = 0;
+    int sys_ret = mknod(full_path, *mode, *dev);
+    if (sys_ret < 0) {
+        *ret = -errno;
+    } else {
+        *ret = sys_ret;
+    }
+
+    // Clean up and return
+    free(full_path);
+    DLOG("Returning code: %d", *ret);
+    return 0;
+}
+
+// The server implementation of open.
+int watdfs_open(int *argTypes, void **args) {
+    // path, fi, retcode
+    char *short_path = (char *)args[0];
+    struct fuse_file_info *fi = (struct fuse_file_info *)args[1];
+    int *ret = (int *)args[2];
+    char *full_path = get_full_path(short_path);
+
+    // open system call
+    *ret = 0;
+    int sys_ret = open(full_path, fi->flags);
+    if (sys_ret < 0) {
+        *ret = -errno;
+    }
+    else {
+        fi->fh = sys_ret;
+    }
+
+    // Clean up and return
+    free(full_path);
+    DLOG("Returning code: %d", *ret);
+    return 0;
+}
+
+// The server implementation of release.
+int watdfs_release(int *argTypes, void **args) {
+    // path, fi, retcode
+    char *short_path = (char *)args[0];
+    struct fuse_file_info *fi = (struct fuse_file_info *)args[1];
+    int *ret = (int *)args[2];
+    char *full_path = get_full_path(short_path);
+
+    // release system call
+    *ret = 0;
+    int sys_ret = close(fi->fh);
+    if (sys_ret < 0) {
+        *ret = -errno;
+    } else {
+        *ret = sys_ret;
+    }
+
+    // Clean up and return
+    free(full_path);
+    DLOG("Returning code: %d", *ret);
+    return 0;
+}
+
+// The server implementation of read.
+int watdfs_read(int *argTypes, void **args) {
+    // path, buf, size, offset, fi, retcode
+    char *short_path = (char *)args[0];
+    char *buf = (char *)args[1];
+    size_t *size = (size_t *)args[2];
+    off_t *offset = (off_t *)args[3];
+    struct fuse_file_info *fi = (struct fuse_file_info *)args[4];
+    int *ret = (int *)args[5];
+    char *full_path = get_full_path(short_path);
+
+    // release system call
+    *ret = 0;
+    int sys_ret = pread(fi->fh, buf, *size, *offset);
+    if (sys_ret < 0) {
+        *ret = -errno;
+    } else {
+        *ret = sys_ret;
+    }
+
+    // Clean up and return
+    free(full_path);
+    DLOG("Number Read: %d", *ret);
+    return 0;
+}
+
+// The server implementation of write.
+int watdfs_write(int *argTypes, void **args) {
+    // path, buf, size, offset, fi, retcode
+    char *short_path = (char *)args[0];
+    char *buf = (char *)args[1];
+    size_t *size = (size_t *)args[2];
+    off_t *offset = (off_t *)args[3];
+    struct fuse_file_info *fi = (struct fuse_file_info *)args[4];
+    int *ret = (int *)args[5];
+    char *full_path = get_full_path(short_path);
+
+    // release system call
+    *ret = 0;
+    DLOG("Size is %ld", *size);
+    int sys_ret = pwrite(fi->fh, buf, *size, *offset);
+    if (sys_ret < 0) {
+        *ret = -errno;
+    } else {
+        *ret = sys_ret;
+    }
+
+    // Clean up and return
+    free(full_path);
+    DLOG("Number Write: %d", *ret);
+    return 0;
+}
+
+// The server implementation of truncate.
+int watdfs_truncate(int *argTypes, void **args) {
+    // path, newsize, retcode
+    char *short_path = (char *)args[0];
+    off_t *newsize = (off_t *)args[1];
+    int *ret = (int *)args[2];
+    char *full_path = get_full_path(short_path);
+
+    // release system call
+    *ret = 0;
+    int sys_ret = truncate(full_path, *newsize);
+    if (sys_ret < 0) {
+        *ret = -errno;
+    } else {
+        *ret = sys_ret;
+    }
+
+    // Clean up and return
+    free(full_path);
+    DLOG("Returning code: %d", *ret);
+    return 0;
+}
+
+// The server implementation of fsync.
+int watdfs_fsync(int *argTypes, void **args) {
+    // path, fi, retcode
+    char *short_path = (char *)args[0];
+    struct fuse_file_info *fi = (struct fuse_file_info *)args[1];
+    int *ret = (int *)args[2];
+    char *full_path = get_full_path(short_path);
+
+    // release system call
+    *ret = 0;
+    int sys_ret = fsync(fi->fh);
+    if (sys_ret < 0) {
+        *ret = -errno;
+    } else {
+        *ret = sys_ret;
+    }
+
+    // Clean up and return
+    free(full_path);
+    DLOG("Returning code: %d", *ret);
+    return 0;
+}
+
+// The server implementation of utimensat.
+int watdfs_utimensat(int *argTypes, void **args) {
+    // path, ts, retcode
+    char *short_path = (char *)args[0];
+    struct timespec *ts = (struct timespec *)args[1];
+    int *ret = (int *)args[2];
+    char *full_path = get_full_path(short_path);
+    DLOG("Atime: %ld %ld", ts[0].tv_sec, ts[0].tv_nsec);
+    DLOG("Mtime: %ld %ld", ts[1].tv_sec, ts[1].tv_nsec);
+
+    // release system call
+    *ret = 0;
+    int sys_ret = utimensat(0, full_path, ts, 0);
+    if (sys_ret < 0) {
+        *ret = -errno;
+    } else {
+        *ret = sys_ret;
+    }
+
+    // Clean up and return
+    free(full_path);
+    DLOG("Returning code: %d", *ret);
     return 0;
 }
 
@@ -102,16 +296,22 @@ int main(int argc, char *argv[]) {
     // Important: `rpcServerInit` prints the 'export SERVER_ADDRESS' and
     // 'export SERVER_PORT' lines. Make sure you *do not* print anything
     // to *stdout* before calling `rpcServerInit`.
-    //DLOG("Initializing server...");
+    DLOG("Initializing server...");
 
-    int ret = 0;
+    int ret = rpcServerInit();
     // TODO: If there is an error with `rpcServerInit`, it maybe useful to have
     // debug-printing here, and then you should return.
+    if(ret < 0) { 
+        DLOG("Failed to Initialize RPC Server.");
+        return ret;
+    }
 
     // TODO: Register your functions with the RPC library.
     // Note: The braces are used to limit the scope of `argTypes`, so that you can
     // reuse the variable for multiple registrations. Another way could be to
     // remove the braces and use `argTypes0`, `argTypes1`, etc.
+
+    // getattr
     {
         // There are 3 args for the function (see watdfs_client.cpp for more
         // detail).
@@ -130,14 +330,197 @@ int main(int argc, char *argv[]) {
         // We need to register the function with the types and the name.
         ret = rpcRegister((char *)"getattr", argTypes, watdfs_getattr);
         if (ret < 0) {
-            // It may be useful to have debug-printing here.
+            DLOG("Failed to register the RPC: getattr");
             return ret;
         }
     }
 
-    // TODO: Hand over control to the RPC library by calling `rpcExecute`.
+    // mknod
+    {
+        int argTypes[5];
+        // path: input, type: ARG_CHAR
+        argTypes[0] = 
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // mode: input, type: ARG_INT
+        argTypes[1] = (1u << ARG_INPUT) | (ARG_INT << 16u);
+        // dev: input, type: ARG_LONG
+        argTypes[2] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
+        // retcode: output, type: ARG_INT
+        argTypes[3] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+        // null terminator.
+        argTypes[4] = 0;
 
-    // rpcExecute could fail, so you may want to have debug-printing here, and
-    // then you should return.
+        ret = rpcRegister((char *)"mknod", argTypes, watdfs_mknod);
+        if (ret < 0) {
+            DLOG("Failed to register the RPC: mknod");
+            return ret;
+        }
+    }
+
+    // open
+    {
+        int argTypes[4];
+        // path: input, type: ARG_CHAR
+        argTypes[0] = 
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // fi: input, output, type: ARG_char
+        argTypes[1] = (1u << ARG_INPUT) | (1u << ARG_OUTPUT) | (1u << ARG_ARRAY) | 
+                      (ARG_CHAR << 16u) | 1u; 
+        // retcode: output, type: ARG_INT
+        argTypes[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+        // null terminator.
+        argTypes[3] = 0;
+
+        ret = rpcRegister((char *)"open", argTypes, watdfs_open);
+        if (ret < 0) {
+            DLOG("Failed to register the RPC: open");
+            return ret;
+        }
+    }
+
+    // release
+    {
+        int argTypes[4];
+        // path: input, type: ARG_CHAR
+        argTypes[0] = 
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // fi: input, output, type: ARG_char
+        argTypes[1] = 
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u; 
+        // retcode: output, type: ARG_INT
+        argTypes[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+        // null terminator.
+        argTypes[3] = 0;
+
+        ret = rpcRegister((char *)"release", argTypes, watdfs_release);
+        if (ret < 0) {
+            DLOG("Failed to register the RPC: release");
+            return ret;
+        }
+    }
+
+    // read
+    {
+        int argTypes[7];
+        // path: input, type: ARG_CHAR
+        argTypes[0] =
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // buf: output, type: ARG_CHAR
+        argTypes[1] =
+            (1u << ARG_OUTPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // size：input, type: ARG_LONG
+        argTypes[2] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
+        // offset: input, type: ARG_LONG
+        argTypes[3] = (1u << ARG_INPUT) | (ARG_LONG << 16u);   
+        // fi: input, type: ARG_CHAR
+        argTypes[4] = 
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // retcode: output, type: ARG_INT
+        argTypes[5] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+        // null terminator.
+        argTypes[6] = 0;
+
+        ret = rpcRegister((char *)"read", argTypes, watdfs_read);
+        if (ret < 0) {
+            DLOG("Failed to register the RPC: read");
+            return ret;
+        }
+    }
+
+    // write
+    {
+        int argTypes[7];
+        // path: input, type: ARG_CHAR
+        argTypes[0] =
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // buf: output, type: ARG_CHAR
+        argTypes[1] =
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // size：input, type: ARG_LONG
+        argTypes[2] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
+        // offset: input, type: ARG_LONG
+        argTypes[3] = (1u << ARG_INPUT) | (ARG_LONG << 16u);   
+        // fi: input, type: ARG_CHAR
+        argTypes[4] = 
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // retcode: output, type: ARG_INT
+        argTypes[5] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+        // null terminator.
+        argTypes[6] = 0;
+
+        ret = rpcRegister((char *)"write", argTypes, watdfs_write);
+        if (ret < 0) {
+            DLOG("Failed to register the RPC: write");
+            return ret;
+        }
+    }
+
+    // truncate
+    {
+        int argTypes[4];
+        // path: input, type: ARG_CHAR
+        argTypes[0] = 
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // fi: input, type: ARG_LONG
+        argTypes[1] = (1u << ARG_INPUT) | (ARG_LONG << 16u);
+        // retcode: output, type: ARG_INT
+        argTypes[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+        // null terminator.
+        argTypes[3] = 0;
+
+        ret = rpcRegister((char *)"truncate", argTypes, watdfs_truncate);
+        if (ret < 0) {
+            DLOG("Failed to register the RPC: truncate");
+            return ret;
+        }
+    }
+
+    // fsync
+    {
+        int argTypes[4];
+        // path: input, type: ARG_CHAR
+        argTypes[0] = 
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // fi: input, type: ARG_char
+        argTypes[1] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // retcode: output, type: ARG_INT
+        argTypes[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+        // null terminator.
+        argTypes[3] = 0;
+
+        ret = rpcRegister((char *)"fsync", argTypes, watdfs_fsync);
+        if (ret < 0) {
+            DLOG("Failed to register the RPC: fsync");
+            return ret;
+        }
+    }
+
+    // utimensat
+    {
+        int argTypes[4];
+        // path: input, type: ARG_CHAR
+        argTypes[0] = 
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // ts: input, type: ARG_char
+        argTypes[1] = (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // retcode: output, type: ARG_INT
+        argTypes[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+        // null terminator.
+        argTypes[3] = 0;
+
+        ret = rpcRegister((char *)"utimensat", argTypes, watdfs_utimensat);
+        if (ret < 0) {
+            DLOG("Failed to register the RPC: utimensat");
+            return ret;
+        }
+    }
+
+    // Hand over control to the RPC library by calling `rpcExecute`.
+    ret = rpcExecute();
+    if(ret < 0) { 
+        DLOG("Failed to Execute the RPC.");
+        return ret;
+    }
+
     return ret;
 }
