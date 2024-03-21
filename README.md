@@ -1,2 +1,2 @@
-﻿# WatDFS
-Term project for CS454
+﻿# Distributed File System
+Term project
