@@ -15,6 +15,9 @@ INIT_LOG
 #include <cstring>
 #include <cstdlib>
 #include <fuse.h>
+#include <map>
+#include <string>
+#include "rw_lock.h"
 
 // Global state server_persist_dir.
 char *server_persist_dir = nullptr;
@@ -22,6 +25,22 @@ char *server_persist_dir = nullptr;
 // Important: the server needs to handle multiple concurrent client requests.
 // You have to be careful in handling global variables, especially for updating them.
 // Hint: use locks before you update any global variable.
+
+// store the status of the file
+// 0 for read
+// 1 for write
+struct status {
+    int rw;
+    rw_lock_t *lock = new rw_lock_t; 
+    uint64_t fd;
+
+    // Constructor that initializes member variables
+    status(int rw) : rw(rw) {
+        rw_lock_init(lock);
+    }
+};
+
+std::map<std::string, status*> file_status;
 
 // We need to operate on the path relative to the server_persist_dir.
 // This function returns a path that appends the given short path to the
@@ -112,9 +131,46 @@ int watdfs_open(int *argTypes, void **args) {
     int *ret = (int *)args[2];
     char *full_path = get_full_path(short_path);
 
+    // check if the file is initialized in the status
+    if(file_status.find(std::string(short_path)) == file_status.end()) {
+        // the file is opened for the first time
+        int rw;
+        if((fi->flags & O_ACCMODE) != O_RDONLY) {
+            // write mode
+            rw = 1;
+        }
+        else {
+            // read mode 
+            rw = 0;
+        }
+        file_status[std::string(short_path)] = new status(rw);
+        DLOG("The file status is initialized.");
+    }
+    else {
+        // the file is not opened for the first time
+        // check file read/write status
+        if(file_status[std::string(short_path)]->rw == 1) {
+            // the file is in the writing mode
+            DLOG("The file mode is write.");
+            if((fi->flags & O_ACCMODE)  != O_RDONLY) {
+                // the client also try to write the file, return error
+                return -EACCES;
+            }
+        }
+        else {
+            // the file is in the reading mode
+            DLOG("The file mode is read.");
+            if((fi->flags & O_ACCMODE)  != O_RDONLY) {
+                // the client try to write the file, record write mode
+                file_status[std::string(short_path)]->rw = 1;
+            }
+        }
+    }
+    
     // open system call
     *ret = 0;
-    int sys_ret = open(full_path, fi->flags);
+    int sys_ret = open(full_path, O_RDWR);
+
     if (sys_ret < 0) {
         *ret = -errno;
     }
@@ -122,6 +178,10 @@ int watdfs_open(int *argTypes, void **args) {
         fi->fh = sys_ret;
     }
 
+    if(file_status[std::string(short_path)]->rw == 1 && (fi->flags & O_ACCMODE) != O_RDONLY) {
+        file_status[std::string(short_path)]->fd = fi->fh;
+    }
+    
     // Clean up and return
     free(full_path);
     DLOG("Returning code: %d", *ret);
@@ -139,6 +199,13 @@ int watdfs_release(int *argTypes, void **args) {
     // release system call
     *ret = 0;
     int sys_ret = close(fi->fh);
+
+    // close the file and clean the status
+    if(file_status[std::string(short_path)]->fd == fi->fh) {
+        file_status[std::string(short_path)]->rw = 0;
+    }
+
+
     if (sys_ret < 0) {
         *ret = -errno;
     } else {
@@ -162,9 +229,10 @@ int watdfs_read(int *argTypes, void **args) {
     int *ret = (int *)args[5];
     char *full_path = get_full_path(short_path);
 
-    // release system call
+    // read system call
     *ret = 0;
     int sys_ret = pread(fi->fh, buf, *size, *offset);
+    DLOG("Buffer: %s", buf);
     if (sys_ret < 0) {
         *ret = -errno;
     } else {
@@ -188,7 +256,7 @@ int watdfs_write(int *argTypes, void **args) {
     int *ret = (int *)args[5];
     char *full_path = get_full_path(short_path);
 
-    // release system call
+    // write system call
     *ret = 0;
     DLOG("Size is %ld", *size);
     int sys_ret = pwrite(fi->fh, buf, *size, *offset);
@@ -212,7 +280,7 @@ int watdfs_truncate(int *argTypes, void **args) {
     int *ret = (int *)args[2];
     char *full_path = get_full_path(short_path);
 
-    // release system call
+    // truncate system call
     *ret = 0;
     int sys_ret = truncate(full_path, *newsize);
     if (sys_ret < 0) {
@@ -235,7 +303,7 @@ int watdfs_fsync(int *argTypes, void **args) {
     int *ret = (int *)args[2];
     char *full_path = get_full_path(short_path);
 
-    // release system call
+    // fsync system call
     *ret = 0;
     int sys_ret = fsync(fi->fh);
     if (sys_ret < 0) {
@@ -260,9 +328,58 @@ int watdfs_utimensat(int *argTypes, void **args) {
     DLOG("Atime: %ld %ld", ts[0].tv_sec, ts[0].tv_nsec);
     DLOG("Mtime: %ld %ld", ts[1].tv_sec, ts[1].tv_nsec);
 
-    // release system call
+    // utimensat system call
     *ret = 0;
     int sys_ret = utimensat(0, full_path, ts, 0);
+    if (sys_ret < 0) {
+        *ret = -errno;
+    } else {
+        *ret = sys_ret;
+    }
+
+    // Clean up and return
+    free(full_path);
+    DLOG("Returning code: %d", *ret);
+    return 0;
+}
+
+// The server implementation of lock.
+int watdfs_lock(int *argTypes, void **args) {
+    // path, rw_lock_mode_t, retcode
+    char *short_path = (char *)args[0];
+    char *full_path = get_full_path(short_path);
+    rw_lock_mode_t *mode = (rw_lock_mode_t *)args[1];
+    int *ret = (int *)args[2];
+
+    rw_lock_t *lock = file_status[std::string(short_path)]->lock;
+
+    *ret = 0;
+    int sys_ret = rw_lock_lock(lock, *mode);
+    if (sys_ret < 0) {
+        *ret = -errno;
+        DLOG("Fail to lock");
+    } else {
+        *ret = sys_ret;
+    }
+
+    // Clean up and return
+    free(full_path);
+    DLOG("Returning code: %d", *ret);
+    return 0;
+}
+
+// The server implementation of lock.
+int watdfs_unlock(int *argTypes, void **args) {
+    // path, rw_lock_mode_t, retcode
+    char *short_path = (char *)args[0];
+    char *full_path = get_full_path(short_path);
+    rw_lock_mode_t *mode = (rw_lock_mode_t *)args[1];
+    int *ret = (int *)args[2];
+
+    rw_lock_t *lock = file_status[std::string(short_path)]->lock;
+
+    *ret = 0;
+    int sys_ret = rw_lock_unlock(lock, *mode);
     if (sys_ret < 0) {
         *ret = -errno;
     } else {
@@ -511,6 +628,46 @@ int main(int argc, char *argv[]) {
         ret = rpcRegister((char *)"utimensat", argTypes, watdfs_utimensat);
         if (ret < 0) {
             DLOG("Failed to register the RPC: utimensat");
+            return ret;
+        }
+    }
+
+    // lock
+    {
+        int argTypes[3];
+        // path: input, type: ARG_CHAR
+        argTypes[0] = 
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // rw_lock_mode_t: input, type: ARG_int
+        argTypes[1] = (1u << ARG_INPUT) |  (ARG_INT << 16u);
+        // retcode: output, type: ARG_INT
+        argTypes[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+        // null terminator.
+        argTypes[3] = 0;
+
+        ret = rpcRegister((char *)"lock", argTypes, watdfs_lock);
+        if (ret < 0) {
+            DLOG("Failed to register the RPC: lock");
+            return ret;
+        }
+    }
+
+    // unlock
+    {
+        int argTypes[3];
+        // path: input, type: ARG_CHAR
+        argTypes[0] = 
+            (1u << ARG_INPUT) | (1u << ARG_ARRAY) | (ARG_CHAR << 16u) | 1u;
+        // rw_lock_mode_t: input, type: ARG_int
+        argTypes[1] = (1u << ARG_INPUT) |  (ARG_INT << 16u);
+        // retcode: output, type: ARG_INT
+        argTypes[2] = (1u << ARG_OUTPUT) | (ARG_INT << 16u);
+        // null terminator.
+        argTypes[3] = 0;
+
+        ret = rpcRegister((char *)"unlock", argTypes, watdfs_unlock);
+        if (ret < 0) {
+            DLOG("Failed to register the RPC: unlock");
             return ret;
         }
     }
